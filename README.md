@@ -13,11 +13,10 @@ Bharat Chandra 25B1086
 
 Copy and Paste the following commands in your terminal.
 
-Install **R** and the package **ncdf4** if you do not already have it.
+Install **R** and the packages **ncdf4**, **ggplot2** if you do not already have it.
 
 ```bash
 git clone git@github.com:throwaway1183/Team-20.git
 cd Team-20
 bash extract.sh
 ```
-
