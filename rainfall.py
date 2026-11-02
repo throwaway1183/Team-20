@@ -79,10 +79,10 @@ plt.savefig("plots/pctexcess.png")
 plt.show()
 
 # For every position make a heatmap of how many days there is an abnormal amount of rainfall
-# We shall consider that a day has an abnormal amount of rainfall in that region if the rainfall on that day is atleast 3 sample standard deviations above the sample mean of rainfall in that region
+# We shall consider that a day has an abnormal amount of rainfall in that region if the rainfall on that day is atleast 2 sample standard deviations above the sample mean of rainfall in that region
 
 # plot the heatmap of number of abnormal days with rainfall per region
-CONST = 3
+CONST = 2
 
 df2025["W"] = df2025["RAINFALL"] > df2025.groupby(["LATITUDE", "LONGITUDE"])[
     "RAINFALL"
