@@ -1,3 +1,16 @@
-data/rainfall/data
-.venv
-venv
+# Python environments/cache
+.venv/
+venv/
+pandas/
+__pycache__/
+*.pyc
+
+# Generated results
+plots/
+results/
+
+# Large downloaded data: keep locally, do not accidentally push to GitHub
+data/rainfall/data/*.csv
+data/rainfall/nc/*.nc
+data/prices/*.csv
+.DS_Store

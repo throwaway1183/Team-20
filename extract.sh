@@ -1,48 +1,63 @@
 #!/usr/bin/env bash
-# run_extract.sh
-# Lives in the home directory. Runs data/rainfall/extract_nc.R to convert every
-# .nc file in data/rainfall/nc/ into CSV files in data/rainfall/data/.
-#
-# Usage (from anywhere):  bash ~/run_extract.sh
+# Optional helper: copy your existing rainfall CSVs into the expected folder.
+# Usage: bash extract.sh /path/to/your/rainfall_csv_folder
+# If CSVs are already in data/rainfall/data/, no action is needed.
 
 set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEST="$ROOT/data/rainfall/data"
+mkdir -p "$DEST"
+shopt -s nullglob
 
-# Resolve paths relative to this script's location (the home directory)
-HOME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RAIN_DIR="${HOME_DIR}/data/rainfall"
-NC_DIR="${RAIN_DIR}/nc"
-OUT_DIR="${RAIN_DIR}/data"
-R_SCRIPT="${RAIN_DIR}/extract_nc.R"
-
-# ---- sanity checks ----------------------------------------------------------
-if ! command -v Rscript >/dev/null 2>&1; then
-  echo "Error: Rscript not found. Please install R first." >&2
-  exit 1
+if [[ $# -gt 1 ]]; then
+    echo "Usage: bash extract.sh [folder_with_rainfall_csvs]" >&2
+    exit 1
 fi
 
-if [[ ! -d "${NC_DIR}" ]]; then
-  echo "Error: input directory not found: ${NC_DIR}" >&2
-  exit 1
+if [[ $# -eq 1 ]]; then
+    SOURCE="$1"
+    if [[ ! -d "$SOURCE" ]]; then
+        echo "Folder not found: $SOURCE" >&2
+        exit 1
+    fi
+    csvs=("$SOURCE"/*.csv)
+    if (( ${#csvs[@]} == 0 )); then
+        echo "No CSV files in: $SOURCE" >&2
+        exit 1
+    fi
+    for file in "${csvs[@]}"; do
+        if [[ "$(cd "$(dirname "$file")" && pwd)" != "$DEST" ]]; then
+            cp -n "$file" "$DEST/"
+        fi
+    done
+    echo "Rainfall CSVs are ready in: $DEST"
+else
+    csvs=("$DEST"/*.csv)
+    if (( ${#csvs[@]} > 0 )); then
+        echo "Already found ${#csvs[@]} rainfall CSV(s) in: $DEST"
+    else
+        # Keep compatibility with the original project if its R converter is available.
+        NC_DIR="$ROOT/data/rainfall/nc"
+        R_CONVERTER="$ROOT/data/rainfall/extract_nc.R"
+        nc_files=("$NC_DIR"/*.nc)
+        if (( ${#nc_files[@]} > 0 )) && [[ -f "$R_CONVERTER" ]]; then
+            if ! command -v Rscript >/dev/null 2>&1; then
+                echo "NetCDF files found, but Rscript is not installed." >&2
+                exit 1
+            fi
+            echo "Converting ${#nc_files[@]} NetCDF file(s) using the existing R converter..."
+            Rscript "$R_CONVERTER"
+            csvs=("$DEST"/*.csv)
+            if (( ${#csvs[@]} == 0 )); then
+                echo "The R converter ran but did not create any CSV files in $DEST" >&2
+                exit 1
+            fi
+            echo "Created ${#csvs[@]} CSV file(s)."
+        else
+            echo "Put your existing rainfall CSVs in: $DEST"
+            echo "Or run: bash extract.sh /path/to/your/csv_folder"
+            echo "If your dataset is NetCDF (.nc), keep your old data/rainfall/extract_nc.R converter."
+            exit 1
+        fi
+    fi
 fi
-
-if [[ ! -f "${R_SCRIPT}" ]]; then
-  echo "Error: R script not found: ${R_SCRIPT}" >&2
-  exit 1
-fi
-
-# Count .nc files (case-insensitive)
-NC_COUNT=$(find "${NC_DIR}" -maxdepth 1 -type f -iname '*.nc' | wc -l)
-if [[ "${NC_COUNT}" -eq 0 ]]; then
-  echo "Error: no .nc files found in ${NC_DIR}" >&2
-  exit 1
-fi
-
-# ---- make sure the output directory exists ----------------------------------
-mkdir -p "${OUT_DIR}"
-
-# ---- run the extraction -----------------------------------------------------
-echo "Found ${NC_COUNT} .nc file(s) in ${NC_DIR}"
-Rscript "${R_SCRIPT}"
-
-CSV_COUNT=$(find "${OUT_DIR}" -maxdepth 1 -type f -name '*.csv' | wc -l)
-echo "Finished. ${CSV_COUNT} CSV file(s) now in ${OUT_DIR}"
