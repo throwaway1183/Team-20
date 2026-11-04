@@ -1,6 +1,6 @@
 # Team 20 - Does Rain Make Onions Cry?
 
-**CS215 Data Analysis and Interpretation — simple student project**
+**CS215 Data Analysis and Interpretation**
 
 We explore one question: **Are onion-price spikes more frequent after unusually wet months?** This project uses CSV files, pandas, matplotlib and R. 
 
