@@ -2,7 +2,7 @@
 
 **CS215 Data Analysis and Interpretation — simple student project**
 
-We explore one question: **Are onion-price spikes more frequent after unusually wet months?** This project uses your actual CSV files, pandas, and matplotlib. It does not use machine learning or try to prove that rainfall causes price changes.
+We explore one question: **Are onion-price spikes more frequent after unusually wet months?** This project uses CSV files, pandas, matplotlib and R. 
 
 ## Team
 
