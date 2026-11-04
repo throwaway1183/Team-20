@@ -1,70 +1,101 @@
-# Team 20 - Does Rain Make Onions Cry?
+# Team 20 — Does Rain Make Onions Cry?
 
-**CS215 Data Analysis and Interpretation — simple student project**
+A simple data-analysis project comparing **weekly onion-price spikes** with unusually wet and normal **monthly rainfall** across **all districts** for which coordinates and data are available. This is a descriptive comparison, not a formal hypothesis test. You can set the number of weeks used to define a price spike with `--weeks N`.
 
-We explore one question: **Are onion-price spikes more frequent after unusually wet months?** This project uses your actual CSV files, pandas, and matplotlib. It does not use machine learning or try to prove that rainfall causes price changes.
+## Files and folders
 
-## Team
+Keep your existing rainfall and price CSVs in their original locations:
 
-- Tsewang Namgyal — 25B0986
-- Vadlamudi Lokesh — 25B1006
-- Bharadhwaj Torati — 25B1073
-- Bharat Chandra — 25B1086
-
-## Installation
-
-You already have a Python virtual environment, so activate it if needed. From the `Team-20` root:
-
-```bash
-python -m pip install -r requirements.txt
+```text
+Team-20/
+├── onion_analysis.py
+├── data/
+│   ├── prices/
+│   │   └── onion_prices.csv
+│   └── rainfall/
+│       └── data/
+│           ├── RF25_ind2021_rfp25.csv
+│           ├── RF25_ind2022_rfp25.csv
+│           ├── RF25_ind2023_rfp25.csv
+│           ├── RF25_ind2024_rfp25.csv
+│           └── RF25_ind2025_rfp25.csv
+└── results/       # generated automatically
 ```
 
-No R is needed **when the CSVs already exist**. To check whether rainfall CSVs are present:
+You do **not** need to download new datasets or rerun NetCDF conversion if these CSVs already exist.
+
+## Run
+
+From `Team-20`:
 
 ```bash
-bash extract.sh
+python3 -m pip install -r requirements.txt
+python3 onion_analysis.py              # 1-week price change (default)
+python3 onion_analysis.py --weeks 2    # 2-week price change
+python3 onion_analysis.py --weeks 4    # 4-week price change
+python3 onion_analysis.py --weeks 8    # 8-week price change
 ```
+
+The script finds all `(State/UT, District)` pairs in your price CSV and matches each with an approximate location in the rainfall grid. On the first run it tries to download district coordinates and saves a cache; internet is needed for that step. To use your own coordinates without a download, provide a CSV with columns `State/UT,District,Latitude,Longitude`:
 
 ```bash
-python onion_analysis.py
+python3 onion_analysis.py --locations district_locations.csv
 ```
 
-The defaults are **State/UT = Andhra Pradesh**, **District = Kurnool**, and nearby **latitude 15.83, longitude 78.05**, because those are a concrete district and price example you supplied.
+## How the calculations work
 
-If you want to study a different district, change **all four matching settings**:
+**Weekly onion-price spike**
+
+1. Read dates using `DD-MM-YYYY` and convert prices like `"1,537.00"` to numbers.
+2. Take the median of all prices for each district on each date, then the median of those daily prices for each **Monday–Sunday week**.
+3. Compare this week's median with the median **N calendar weeks earlier** using `--weeks N` (default `1`):
+
+   `price_change_pct = 100 * (this_week_price / price_N_weeks_ago - 1)`
+
+4. A price increase of **at least 20% over N weeks** counts as a spike (`--spike-threshold 20`). All weeks within the N-week comparison window must contain at least one observed price; missing weeks invalidate that comparison. For example, `--weeks 4` compares the current week with four weeks earlier, but only if all five weekly prices exist.
+
+**Monthly rainfall**
+
+- Daily rainfall is summed for the closest 0.25° grid cell; a month must have at least **25 valid daily readings**.
+- For a given month/year, compute the *mean (μ)* and *sample standard deviation (σ)* of rainfall for that **same calendar month in the other available years**. At least **four other years** are required.
+- **Wet:** monthly rainfall **strictly greater than μ + 2σ**.
+- **Normal:** monthly rainfall **less than or equal to μ + 2σ**, including dry months and zero-rainfall months.
+- **Unclassified:** only months lacking rainfall readings or enough reference years. No minimum rainfall or standard deviation cutoff is imposed.
+- This project uses **"normal" to mean "not extremely wet"**, rather than a meteorological definition of average rainfall. Thus drought months are included in the normal group.
+
+**Matching rain to prices**
+
+The default is `--lag 1`: a price week is assigned by its **Sunday (end) date**; every week ending in July uses the **rainfall classification for June**. Thus several weekly price observations can share the same month's rainfall label. This is expected and means the weekly observations are not independent.
+
+You can try `--lag 2` (two previous months) or `--lag 0` (same month). **Caution:** `--lag 0` pairs an early-month price week with the *whole month's rainfall*, including rainfall after that week; use it as a descriptive comparison only.
+
+The 20% monthly spike threshold from the original proposal is now interpreted as **20% over the selected number of weeks**. With `--weeks 1`, this means a single-week increase; with `--weeks 4`, it means an increase across four weeks. Overlapping multiweek windows are not independent. Changing `--weeks` changes the definition of a spike, so compare results carefully. If you want to examine smaller weekly movements, try:
 
 ```bash
-python onion_analysis.py --state Maharashtra --district Nashik --latitude 20.0 --longitude 73.8
+python3 onion_analysis.py --spike-threshold 10
 ```
 
-If `Nashik` is not how the district is spelled in your CSV, use the exact spelling shown in its `District` column. The coordinates are approximate and must describe the same place as the district; otherwise the comparison is misleading.
+Do not change thresholds just to make the hypothesis look supported.
 
-The script reads all five rainfall years **in chunks**, keeping only the requested nearby grid point. This avoids filling RAM with tens of millions of rainfall rows.
+## Output (`results/`)
 
-Output in `results/`:
-
-| File | What it shows |
+| File | Contents |
 |---|---|
-| `monthly_results.csv` | One row per month: price, price change, rainfall, wet/normal/dry label |
-| `spike_rates.csv` | Count of wet and normal months and their price-spike rates |
-| `summary.txt` | Simple written result and important limitations |
-| `onion_prices.png` | Monthly median price line plot |
-| `monthly_rainfall.png` | Rainfall line plot |
-| `spike_comparison.png` | Percentage of months with price spikes after wet vs normal months |
-| `rainfall_vs_price.png` | Rainfall level compared with percentage price change |
+| `summary.txt` | Overall weekly spike rates after wet and normal rainfall, and a simple conclusion. |
+| `district_results.csv` | All districts, `wet_weeks`, `normal_weeks`, spike counts, rates, and availability status. |
+| `all_weekly_results.csv` | Weekly median prices, selected comparison window (`comparison_weeks`), price N weeks earlier (`reference_onion_price`), N-week percentage change, price-spike indicator, and rainfall details. |
+| `district_comparison.png` | Weekly spike-rate comparison for up to 20 districts with both conditions. |
+| `unmatched_districts.csv` | District names whose coordinates were unavailable. |
+| `missing_locations_template.csv` | Sheet to add your own coordinates for those districts. |
+| `district_coordinates_cache.json` | Coordinates cache, if obtained by the script. |
 
-1. **Daily district price:** median of that day's `Modal Price` rows; **monthly price:** median of the daily values in that month.
-2. **Monthly rainfall:** sum of valid daily rainfall at the nearest 0.25° grid point. Months with fewer than 20 observed days are skipped.
-3. **Typical rainfall:** average rainfall for the **same calendar month** across the available years (e.g. January compared to other Januaries). This is a rough baseline, **not official historical IMD normal rainfall**.
-4. **Unusually wet:** at least 120% of the corresponding month's typical rainfall. **Normal:** 80% to less than 120%. Dry months and calendar months whose baseline is less than 10 mm are excluded from the wet-vs-normal comparison.
-5. **Price spike:** monthly median onion price increased by **20% or more** from the preceding month.
-6. By default compare **last month's rain** with **this month's price change**. Try same-month rainfall with `--lag 0` or rainfall two months earlier with `--lag 2`.
-7. Count how frequently a price spike followed wet months and normal months.
+**Note:** If you ran the old *monthly* script earlier, `results/all_monthly_results.csv` may still be present. It is an older output; use **`all_weekly_results.csv`** for this version.
 
-Example options:
+## Hypothesis
 
-```bash
-python onion_analysis.py --lag 0 --spike-threshold 15
-```
+- **H0:** The selected N-week onion-price spike rates are the same after unusually wet versus normal rainfall.
+- **H1:** The selected N-week spike rate is higher after unusually wet rainfall.
 
-**Interpret carefully:** this is a small observational analysis. Rainfall at one grid point is not district-wide rainfall. Price data may mix different mandis within the district. Rainfall, harvest seasons, storage, transportation, and market factors all matter. A higher spike percentage after wet months does **not** prove a causal relationship.
+The program **compares the observed rates only**. It does not calculate a p-value or prove that rain causes changes in onion prices.
+
+The baseline uses a short set of rainfall years (often 2021–2025) rather than official long-term rainfall normals, and each district is represented by an approximate rainfall-grid cell. Treat findings as exploratory.

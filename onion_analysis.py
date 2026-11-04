@@ -1,11 +1,11 @@
 """Team 20: Wet rainfall versus onion-price spikes, all districts.
 
-Wet week: rainfall > same ISO-week mean (other years) + 2 sample SD.
+Wet week: weekly rainfall > trailing N-month mean + configurable SD multiplier.
 Price spike: >= threshold rise in any of the following 1..N price weeks.
 Normal-group events are protected by a two-week wet-rainfall lookback.
 
-NEW: report two-sided Wald confidence intervals for p_wet - p_normal.
-This is a simple school project; the CI assumes independent observations,
+report two-sided Wald confidence intervals for p_wet - p_normal.
+The CI assumes independent observations,
 which overlapping weekly windows and districts may violate.
 """
 
@@ -33,8 +33,9 @@ LOCATION_URL = (
     "https://raw.githubusercontent.com/open-admin-data/"
     "india-administrative-divisions/master/data/all-district.json"
 )
-MIN_REFERENCE_YEARS = 4
-WET_SD_MULTIPLIER = 2.0
+MIN_REFERENCE_WEEKS = 2  # Minimum valid weekly totals needed for a sample SD
+DEFAULT_TIME_RAINFALL = 6  # Rolling window length in calendar months
+DEFAULT_STD_DEV = 1.5  # Standard deviations above the rolling mean
 MIN_DAILY_RAIN_OBSERVATIONS = 5
 
 
@@ -181,26 +182,55 @@ def read_rainfall(folder, keys):
     }
 
 
-def classify_rainfall(weekly_rain):
-    """Wet if weekly rainfall > mean + 2 sample SD of same ISO week in other years."""
+def classify_rainfall(weekly_rain, time_rainfall=DEFAULT_TIME_RAINFALL,
+                      std_dev=DEFAULT_STD_DEV):
+    """Compare each weekly total to a trailing window of calendar months.
+
+    The window starts time_rainfall calendar months before the target week's
+    Monday and ends with the target week. Only weeks up to and including
+    the target week are used: no future rainfall is included.
+
+    At this grid location, compute the mean and *sample* SD (ddof=1) of
+    nonmissing weekly totals in that window. A week is wet if its total is
+    STRICTLY greater than mean + std_dev * SD. Valid weeks at or below the cutoff
+    are normal; missing rainfall or <2 valid weekly totals is unclassified.
+
+    For calendar-month offsets, the Monday start date of each week is used.
+    """
+    if isinstance(time_rainfall, bool) or not isinstance(time_rainfall, int) or time_rainfall < 1:
+        raise ValueError("time_rainfall must be a positive integer (calendar months)")
+    if (isinstance(std_dev, bool) or not isinstance(std_dev, (int, float))
+            or not math.isfinite(std_dev) or std_dev <= 0):
+        raise ValueError("std_dev must be a positive finite number")
+
     weather = pd.Series("unclassified", index=weekly_rain.index, dtype="object")
     means = pd.Series(float("nan"), index=weekly_rain.index, dtype="float64")
     deviations = pd.Series(float("nan"), index=weekly_rain.index, dtype="float64")
     counts = pd.Series(0, index=weekly_rain.index, dtype="int64")
-    iso_weeks = pd.Series(
-        [week.start_time.isocalendar().week for week in weekly_rain.index],
-        index=weekly_rain.index,
-    )
-    for week, rainfall in weekly_rain.dropna().items():
-        other_years = weekly_rain[
-            (weekly_rain.index != week) & (iso_weeks == iso_weeks.loc[week])
-        ].dropna()
-        if len(other_years) < MIN_REFERENCE_YEARS:
+
+    # read_rainfall() has already separated the data by grid cell.
+    valid = weekly_rain.dropna().sort_index()
+    if valid.empty:
+        return weather, means, deviations, counts
+
+    # Slide the window back by N full calendar months from each week's Monday.
+    # searchsorted finds the earliest complete weekly total in that window.
+    week_starts = valid.index.start_time
+    oldest_dates = week_starts - pd.DateOffset(months=time_rainfall)
+    rainfall_values = valid.to_numpy(dtype="float64")
+    for i, (week, rainfall) in enumerate(valid.items()):
+        start = int(week_starts.searchsorted(oldest_dates[i], side="left"))
+        window = rainfall_values[start:i + 1]  # Includes the target, never future weeks.
+        if window.size < MIN_REFERENCE_WEEKS:
             continue
-        mean = float(other_years.mean())
-        sd = float(other_years.std(ddof=1))
-        means.loc[week], deviations.loc[week], counts.loc[week] = mean, sd, len(other_years)
-        weather.loc[week] = "wet" if rainfall > mean + WET_SD_MULTIPLIER * sd else "normal"
+        mean = float(window.mean())
+        sd = float(window.std(ddof=1))
+        means.loc[week] = mean
+        deviations.loc[week] = sd
+        counts.loc[week] = window.size
+        weather.loc[week] = (
+            "wet" if rainfall > mean + std_dev * sd else "normal"
+        )
     return weather, means, deviations, counts
 
 
@@ -214,9 +244,12 @@ def recent_rainfall(weather, week, lookback):
     return "clear"
 
 
-def compare(prices, rain, threshold=20, weeks=4, lookback=2):
+def compare(prices, rain, threshold=20, weeks=4, lookback=2,
+            time_rainfall=DEFAULT_TIME_RAINFALL, std_dev=DEFAULT_STD_DEV):
     """Make one observed success or failure per rainfall week, if eligible."""
-    weather, means, stds, counts = classify_rainfall(rain)
+    weather, means, stds, counts = classify_rainfall(
+        rain, time_rainfall=time_rainfall, std_dev=std_dev
+    )
     rows = []
     for week, rain_mm in rain.sort_index().items():
         condition = weather.get(week, "unclassified")
@@ -270,8 +303,10 @@ def compare(prices, rain, threshold=20, weeks=4, lookback=2):
             "rainfall_mm": rain_mm,
             "reference_mean_mm": means.get(week),
             "reference_std_mm": stds.get(week),
-            "wet_cutoff_mm": means.get(week) + 2 * stds.get(week),
-            "reference_years": counts.get(week),
+            "wet_cutoff_mm": means.get(week) + std_dev * stds.get(week),
+            "rolling_reference_weeks": counts.get(week),
+            "rainfall_lookback_months": time_rainfall,
+            "rainfall_std_dev_multiplier": std_dev,
             "baseline_price": baseline,
             "price_window_weeks": weeks,
             "complete_price_window": complete,
@@ -520,7 +555,9 @@ footer{color:#677589;font-size:12px;margin-top:25px}
 <h1>Does Rain Make Onions Cry?</h1><p>All-district weekly rainfall and onion-price spike report · two-sided Wald confidence intervals</p>
 <div class='pills'><span class='pill'>Confidence: {{CONFIDENCE}}%</span>
 <span class='pill'>Spike: ≥{{THRESHOLD}}%</span><span class='pill'>Response: weeks 1–{{WEEKS}}</span>
-<span class='pill'>Normal-group lookback: {{LOOKBACK}} weeks</span></div></header>
+<span class='pill'>Normal-group lookback: {{LOOKBACK}} weeks</span>
+<span class='pill'>Rainfall baseline: {{TIME_RAINFALL}} months</span>
+<span class='pill'>Wet cutoff: mean + {{STD_DEV}} SD</span></div></header>
 <div class='grid'>
 <div class='card'><div class='label'>Wet spike proportion (p₁)</div><div class='number'>{{WET_RATE}}</div></div>
 <div class='card'><div class='label'>Normal spike proportion (p₀)</div><div class='number'>{{NORMAL_RATE}}</div></div>
@@ -545,7 +582,7 @@ footer{color:#677589;font-size:12px;margin-top:25px}
 <p class='note'>The intervals and decisions come from the current analysis run. “Insufficient data” means at least one group has no eligible weeks. Status and warnings are included for every district.</p></section>
 <section><h2>Charts</h2><div class='chart-grid'>{{CHARTS}}</div></section>
 <section class='section'><h2>How to read this report</h2>
-<p>Each rainfall week is <strong>wet</strong> if its rainfall exceeds the mean for the same ISO week in other available years + 2 sample SD. Otherwise it is <strong>normal/non-wet</strong>, including dry weeks. At least four reference years are required.</p>
+<p>Each rainfall week is <strong>wet</strong> if its weekly total exceeds the mean + {{STD_DEV}} sample standard deviations of weekly totals from the trailing <strong>{{TIME_RAINFALL}} calendar months</strong> at the same grid point. The window starts that many calendar months before the current week's Monday and ends with the current week. It includes that week and never uses future rainfall. Other valid weeks are <strong>normal/non-wet</strong>. At least two valid weekly totals are needed; missing rainfall or insufficient history remains unclassified.</p>
 <p>A price spike is a ≥{{THRESHOLD}}% increase from the reference week's median price in any of the next {{WEEKS}} weeks. Each eligible rainfall reference week counts at most once. For a normal reference week and candidate price spike, the previous {{LOOKBACK}} rainfall weeks must all be non-wet; missing or recently wet histories are excluded.</p>
 <div class='formula'>d = p₁ − p₀<br>SE = sqrt(p₁(1−p₁)/n₁ + p₀(1−p₀)/n₀)<br>CI = [d − z·SE, d + z·SE]</div>
 <p class='note'><strong>Important limitations:</strong> These are approximate large-sample Wald intervals. The calculation assumes independent observations, but price windows overlap, observations are clustered by district, and some districts share rainfall grid cells. Few successes/failures can make the interval unreliable. This study identifies associations, not causation.</p>
@@ -559,6 +596,8 @@ search.addEventListener('input',update);filter.addEventListener('change',update)
         "CONFIDENCE": numeric(args.confidence, digits=0),
         "THRESHOLD": numeric(args.spike_threshold, digits=1),
         "WEEKS": str(args.weeks), "LOOKBACK": str(args.lookback_weeks),
+        "TIME_RAINFALL": str(args.time_rainfall),
+        "STD_DEV": f"{args.std_dev:g}",
         "WET_RATE": rate(overall["wet_rate_pct"], wet_success, wet_n),
         "NORMAL_RATE": rate(overall["normal_rate_pct"], normal_success, normal_n),
         "DIFFERENCE": numeric(overall["difference_pct_points"], signed=True, suffix=" pp"),
@@ -592,6 +631,17 @@ def positive_int(value):
     raise argparse.ArgumentTypeError("must be a positive whole number")
 
 
+def positive_float(value):
+    """Parse a strictly positive finite standard-deviation multiplier."""
+    try:
+        number = float(value)
+    except (ValueError, TypeError) as error:
+        raise argparse.ArgumentTypeError("must be a positive finite number") from error
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
+    return number
+
+
 def parse_confidence(value):
     """Accept --confidence 95, 99, 90, or 0.95."""
     try:
@@ -613,6 +663,11 @@ def main():
                         help="Optional CSV: State/UT,District,Latitude,Longitude")
     parser.add_argument("--output", type=Path, default=ROOT / "results")
     parser.add_argument("--weeks", type=positive_int, default=4, help="Check weeks 1..N (default 4)")
+    parser.add_argument("--time-rainfall", type=positive_int, default=DEFAULT_TIME_RAINFALL,
+                        metavar="MONTHS", help="Trailing calendar months for wet-week rainfall baseline (default 12)")
+    parser.add_argument("--std-dev", type=positive_float, default=DEFAULT_STD_DEV,
+                        metavar="MULTIPLIER",
+                        help="Wet-week cutoff: rolling mean + MULTIPLIER sample SD (default 1.5)")
     parser.add_argument("--lookback-weeks", type=positive_int, default=2,
                         help="Normal-group preceding nonwet weeks (default 2)")
     parser.add_argument("--spike-threshold", type=float, default=10.0,
@@ -674,7 +729,8 @@ def main():
                 else:
                     events, eligible = compare(prices, rainfall_data[key],
                                                args.spike_threshold, args.weeks,
-                                               args.lookback_weeks)
+                                               args.lookback_weeks, args.time_rainfall,
+                                               args.std_dev)
                     for condition in ("wet", "normal"):
                         subset = eligible[eligible["rain_condition"] == condition]
                         record[f"{condition}_weeks"] = len(subset)
@@ -725,8 +781,9 @@ def main():
             f"Districts in prices: {len(places)} | matched coordinates: {len(matched)}",
             f"Districts with both eligible rainfall groups: {len(comparable)}",
             f"Price spike: >= {args.spike_threshold:g}% within 1..{args.weeks} weeks",
-            "Wet: rainfall > mean of other years' same ISO week + 2 sample SD",
-            "Normal: rainfall <= threshold, including dry weeks",
+            f"Wet: weekly rainfall > trailing {args.time_rainfall} calendar-month mean + {args.std_dev:g} sample SD (same grid)",
+            "Baseline: trailing months ending at current week; includes target week, no future rainfall",
+            "Normal: valid rainfall <= rolling cutoff, including dry weeks",
             f"Normal lookback: previous {args.lookback_weeks} weeks must be non-wet; candidate spike weeks also checked",
             "Missing price windows, unknown lookbacks and contaminated normal spikes are excluded.",
             "One eligible reference week counts as at most one success.",
