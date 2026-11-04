@@ -14,7 +14,7 @@ We explore one question: **Are onion-price spikes more frequent after unusually 
 
 ## Quick start
 
-Run these commands from the **repository root** after obtaining the project data (see [Data setup](#data-setup)).
+Run these commands from the **repository root**.
 
 ```bash
 # 1. Create a Python environment
